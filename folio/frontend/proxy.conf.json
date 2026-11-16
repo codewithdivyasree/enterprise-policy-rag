@@ -1,0 +1,38 @@
+{
+  "/health": {
+    "target": "http://127.0.0.1:8000",
+    "secure": false
+  },
+  "/upload": {
+    "target": "http://127.0.0.1:8000",
+    "secure": false
+  },
+  "/documents": {
+    "target": "http://127.0.0.1:8000",
+    "secure": false
+  },
+  "/search": {
+    "target": "http://127.0.0.1:8000",
+    "secure": false
+  },
+  "/auth": {
+    "target": "http://127.0.0.1:8000",
+    "secure": false
+  },
+  "/rag": {
+    "target": "http://127.0.0.1:8000",
+    "secure": false
+  },
+  "/ask": {
+    "target": "http://127.0.0.1:8000",
+    "secure": false
+  },
+  "/settings": {
+    "target": "http://127.0.0.1:8000",
+    "secure": false
+  },
+  "/connections": {
+    "target": "http://127.0.0.1:8000",
+    "secure": false
+  }
+}
