@@ -1,7 +1,7 @@
 import {Component, OnInit, inject, ChangeDetectorRef, HostListener} from '@angular/core';
 import {CommonModule} from '@angular/common';
 import {FormsModule} from '@angular/forms';
-import {HttpClient, HttpErrorResponse} from '@angular/common/http';
+import {HttpClient, HttpErrorResponse, HttpEventType} from '@angular/common/http';
 import {firstValueFrom} from 'rxjs';
 import {marked} from 'marked';
 import DOMPurify from 'dompurify';
@@ -48,7 +48,7 @@ export class AppComponent implements OnInit {
   }catch(e){const h=e as HttpErrorResponse;this.authError=typeof h.error?.detail==='string'?h.error.detail:(h.status===422?'Check all fields and try again.':'Cannot connect. Check that the backend is running.');}
   finally{this.authBusy=false;this.cd.detectChanges();}
  }
- resetWorkspace(){this.user=null;this.docs=[];this.messages=[];this.selected.clear();this.reports=[];this.preview=null;this.showReport=false;this.confirmClear=false;this.question='';this.filter='';this.libraryPage=0;this.profileOpen=false;this.error='';this.notice='';this.view='workspace';this.ragStatus=null;this.provider='sources';this.providerChosen=false;this.clearConnectionState();}
+ resetWorkspace(){this.user=null;this.chatId='';this.chatTitle='';this.chats=[];this.historyOpen=false;this.lastFailedQuestion='';this.answerMode='auto';this.docs=[];this.messages=[];this.selected.clear();this.reports=[];this.preview=null;this.showReport=false;this.confirmClear=false;this.question='';this.filter='';this.libraryPage=0;this.profileOpen=false;this.error='';this.notice='';this.view='workspace';this.ragStatus=null;this.provider='sources';this.providerChosen=false;this.clearConnectionState();}
  async logout(){
   if(this.uploading||this.indexing||this.searching||this.authBusy||this.settingsBusy)return;
   this.authBusy=true;
@@ -63,8 +63,20 @@ export class AppComponent implements OnInit {
  preview:{source:string;content:Unit[]}|null=null; confirmClear=false;
  motion=localStorage.getItem('folio-motion')||(matchMedia('(prefers-reduced-motion: reduce)').matches?'off':'on');
  theme=localStorage.getItem('folio-theme')||'light';
- pendingName=''; model='Semantic sources'; provider='sources'; indexing=false;
+ uploadStage=''; uploadPercent=0; pendingName=''; model='Semantic sources'; provider='sources'; indexing=false;
  ragStatus:RagStatus|null=null; providerChosen=false;
+ answerMode:'auto'|'documents'|'general'='auto';
+ chats:{id:string;title:string;updated_at:string}[]=[];chatId='';chatTitle='';historyOpen=false;chatFilter='';chatBusy=false;deleteChatId='';lastFailedQuestion='';
+ get filteredChats(){return this.chats.filter(c=>c.title.toLowerCase().includes(this.chatFilter.toLowerCase()));}
+ async loadChats(){try{this.chats=await firstValueFrom(this.http.get<typeof this.chats>('/conversations'));}catch(e){this.fail(e);}}
+ async openHistory(){this.historyOpen=true;await this.loadChats();}
+ async openChat(id:string){if(this.searching||this.chatBusy)return;this.chatBusy=true;try{const c=await firstValueFrom(this.http.get<{id:string;title:string;messages:Message[]}>('/conversations/'+id));this.chatId=c.id;this.chatTitle=c.title;this.messages=c.messages.map(m=>({...m,html:m.role==='assistant'?this.renderMarkdown(m.text):undefined}));this.historyOpen=false;this.view='workspace';this.lastFailedQuestion='';}catch(e){this.fail(e);}finally{this.chatBusy=false;this.cd.detectChanges();}}
+ async saveChat(){if(!this.user||!this.messages.length)return;const payload={title:this.chatTitle||this.messages.find(m=>m.role==='user')?.text.slice(0,100)||'Conversation',messages:this.messages.slice(-100).map(({html,...m})=>m)};try{if(this.chatId)await firstValueFrom(this.http.put('/conversations/'+this.chatId,payload));else{const c=await firstValueFrom(this.http.post<{id:string}>('/conversations',payload));this.chatId=c.id;}this.chatTitle=payload.title;}catch{this.error='Your reply is available, but conversation history could not be saved.';}}
+ async deleteChat(){if(!this.deleteChatId||this.chatBusy)return;this.chatBusy=true;try{await firstValueFrom(this.http.delete('/conversations/'+this.deleteChatId));if(this.chatId===this.deleteChatId)this.newChat();this.deleteChatId='';await this.loadChats();}catch(e){this.fail(e);}finally{this.chatBusy=false;this.cd.detectChanges();}}
+ async renameChat(){const title=this.chatTitle.trim();if(!this.chatId||!title)return;this.chatTitle=title.slice(0,100);await this.saveChat();await this.loadChats();}
+ async copyAnswer(text:string){try{await navigator.clipboard.writeText(text);this.notice='Answer copied.';}catch{this.error='Clipboard access was blocked. Select and copy the answer manually.';}this.cd.detectChanges();}
+ retry(){if(this.lastFailedQuestion&&!this.searching){this.question=this.lastFailedQuestion;if(this.messages.at(-1)?.text==='The request could not be completed. Check the message above, then retry. Your documents are still saved.')this.messages.splice(-2);void this.send();}}
+
 
 
  apiConnections:Connection[]=[];providerOptions:ProviderOption[]=[];connectionsLoading=false;connectionSaving=false;connectionAction='';connectionsGeneral=true;savedGeneral=true;
@@ -142,7 +154,7 @@ export class AppComponent implements OnInit {
   catch(e){this.connectionsGeneral=this.savedGeneral;this.error=this.connectionErrorText(e);}
   finally{this.connectionSaving=false;this.cd.detectChanges();}
  }
- get canAsk(){return this.provider==='sources'?this.docs.length>0:(this.ragStatus?.general_chat_enabled??true)||this.docs.length>0;}
+ get canAsk(){if(this.answerMode==='general')return this.provider!=='sources'&&(this.ragStatus?.general_chat_enabled??true);if(this.answerMode==='documents')return this.docs.length>0;return this.provider==='sources'?this.docs.length>0:(this.ragStatus?.general_chat_enabled??true)||this.docs.length>0;}
  get activeProvider(){return this.ragStatus?.providers.find(p=>p.id===this.provider);}
  async loadRag(){
   try{this.ragStatus=await firstValueFrom(this.http.get<RagStatus>('/rag/status'));
@@ -183,11 +195,16 @@ export class AppComponent implements OnInit {
   this.uploading=true;this.error='';this.notice='';this.reports=[];
   try{
    for(const file of files){
-    this.pendingName=file.name;
+    this.pendingName=file.name;this.uploadStage="Uploading";this.uploadPercent=0;this.cd.detectChanges();
     if(file.size>10*1024*1024){this.reports.push({source:file.name,status:'failed',reason:'Upload exceeds 10 MiB'});continue;}
     const data=new FormData();data.append('file',file);
     try{
-     const result=await firstValueFrom(this.http.post<{files:Report[];document_ids:string[]}>('/upload',data));
+     const result=await new Promise<{files:Report[];document_ids:string[]}>((resolve,reject)=>{
+      this.http.post<{files:Report[];document_ids:string[]}>('/upload',data,{observe:'events',reportProgress:true}).subscribe({next:event=>{
+       if(event.type===HttpEventType.UploadProgress){this.uploadPercent=Math.round(100*event.loaded/(event.total||file.size||1));if(this.uploadPercent>=100)this.uploadStage='Extracting files';this.cd.detectChanges();}
+       if(event.type===HttpEventType.Response&&event.body)resolve(event.body);
+      },error:reject});
+     });
      this.reports.push(...result.files);result.document_ids.forEach(id=>this.selected.add(id));
     }catch(e){const h=e as HttpErrorResponse;this.reports.push({source:file.name,status:'failed',reason:typeof h.error?.detail==='string'?h.error.detail:'Upload failed. Check the backend connection.'});}
    }
@@ -211,19 +228,19 @@ export class AppComponent implements OnInit {
   const text=this.question.trim();if(!text||this.searching||this.indexing||!this.canAsk)return;
   const history=this.messages.slice(-6).map(m=>({role:m.role,text:m.text.slice(0,4000)}));
   const selectedProvider=this.provider;
-  this.question='';this.error='';this.searching=true;this.messages.push({role:'user',text});
+  this.question='';this.error='';this.lastFailedQuestion='';this.searching=true;this.messages.push({role:'user',text});
   try{
-   const result=await firstValueFrom(this.http.post<{answer:string;sources:Match[];provider:string;mode:string;provider_label?:string;latency_ms:number;usage:{input_tokens?:number;output_tokens?:number;html?:string}}>('/ask',{question:text,document_ids:[...this.selected],provider:selectedProvider,history}));
+   const result=await firstValueFrom(this.http.post<{answer:string;sources:Match[];provider:string;mode:string;provider_label?:string;latency_ms:number;usage:{input_tokens?:number;output_tokens?:number;html?:string}}>('/ask',{question:text,document_ids:[...this.selected],provider:selectedProvider,history,answer_mode:this.answerMode}));
    const citedIds=new Set(Array.from(result.answer.matchAll(/\[(S\d+)\]/g),match=>match[1]));
    const displayedSources=result.mode==='rag_answer'
      ? result.sources.filter(source=>!!source.citation_id&&citedIds.has(source.citation_id))
      : result.provider==='sources'?result.sources:[];
    this.messages.push({role:'assistant',text:this.cleanAnswer(result.answer),html:this.renderMarkdown(result.answer),matches:displayedSources,provider:result.provider,providerLabel:result.provider_label,latency:result.latency_ms,tokens:(result.usage.input_tokens||0)+(result.usage.output_tokens||0)});
    await this.loadRag();
-  }catch(e){this.fail(e);this.messages.push({role:'assistant',text:'The request could not be completed. Check the message above, then retry. Your documents are still saved.'});}
-  finally{this.searching=false;this.cd.detectChanges();setTimeout(()=>document.getElementById('conversation-end')?.scrollIntoView({behavior:'smooth',block:'nearest'}),20);}
+  }catch(e){this.lastFailedQuestion=text;this.fail(e);this.messages.push({role:'assistant',text:'The request could not be completed. Check the message above, then retry. Your documents are still saved.'});}
+  finally{if(this.user)await this.saveChat();this.searching=false;this.cd.detectChanges();setTimeout(()=>document.getElementById('conversation-end')?.scrollIntoView({behavior:'smooth',block:'nearest'}),20);}
  }
- newChat(){this.messages=[];this.question='';this.notice='Started a new conversation.';}
+ newChat(){this.chatId='';this.chatTitle='';this.lastFailedQuestion='';this.messages=[];this.question='';this.notice='Started a new conversation.';}
  sample(text:string){this.question=text;document.getElementById('question')?.focus();}
  download(){
   const content=this.messages.map(m=>m.role.toUpperCase()+': '+m.text+(m.matches||[]).map(x=>'\n['+x.source+' • '+x.location+']\n'+x.excerpt).join('\n')).join('\n\n');

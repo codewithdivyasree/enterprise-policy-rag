@@ -272,3 +272,17 @@ https://reference.langchain.com/python/langchain-text-splitters/character/Recurs
 https://cookbook.chromadb.dev/core/collections/
 https://console.groq.com/docs/text-chat
 https://googleapis.github.io/python-genai/
+
+
+## November 16 usability update
+
+- Answer modes: Auto (retrieval with permitted general fallback), Documents only (no general fallback), General chat (skips retrieval; requires a configured provider and enabled general questions).
+- Saved conversations: account-scoped database history, search by title, reopen, rename and delete. Up to 100 conversations per account and the most recent 100 messages per conversation are saved.
+- Copy answer, retry a failed question, collapsible supporting sources, and real upload progress followed by extraction status. Indexing remains an explicit Prepare documents step.
+- Per-account /ask limit: 20 requests per rolling minute on the current single-instance deployment; HTTP 429 includes Retry-After. Limits reset on restart and are not a distributed quota.
+- Chat content is stored in the account database; it is not end-to-end encrypted. API keys retain their separate encryption.
+
+### Deployment limits and remaining work
+The free Render deployment uses an ephemeral SQLite database and Chroma index. This update does not make them durable. A restart/redeployment may erase accounts, saved chats, documents and configured keys. Do not treat it as permanent storage. Durable storage needs an external database/storage service or a paid persistent disk. Existing local installations retain data when backend/data is preserved.
+
+Native provider streaming/Stop, a measured answer-quality evaluation dashboard, and durable cloud storage remain future work. The UI does not simulate streaming or claim an unmeasured accuracy score.

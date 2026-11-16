@@ -1,4 +1,7 @@
 import re
+import time
+import threading
+from collections import defaultdict, deque
 import os
 from dotenv import load_dotenv
 from pathlib import Path
@@ -16,11 +19,13 @@ from . import store, rag
 from .auth import router as auth_router, current_user
 from .provider_config import router as settings_router
 from .connections import router as connections_router
+from .conversations import router as conversations_router
 
 app = FastAPI(title="RAG Assistant", version="1.1.0")
 app.include_router(auth_router)
 app.include_router(settings_router)
 app.include_router(connections_router)
+app.include_router(conversations_router)
 
 @app.exception_handler(RequestValidationError)
 async def safe_validation_errors(request,exc):
@@ -120,6 +125,7 @@ class HistoryTurn(BaseModel):
     text: str = Field(max_length=4000)
 
 class Ask(BaseModel):
+    answer_mode: Literal["auto","documents","general"] = "auto"
     question: str = Field(min_length=1,max_length=2000,pattern=r".*\S.*")
     provider: str = Field(default="sources",max_length=80,pattern=r"^(?:sources|groq|gemini|openai|anthropic|custom|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
     document_ids: list[str] = Field(default_factory=list,max_length=500)
@@ -138,8 +144,22 @@ def index_documents(user=Depends(current_user)):
     except Exception as exc:
         raise HTTPException(503,"Document indexing failed. Check storage permissions and embedding dependencies, then retry.") from exc
 
+_ask_lock=threading.Lock()
+_ask_windows=defaultdict(deque)
+def check_ask_limit(user_id):
+    now=time.monotonic()
+    with _ask_lock:
+        for key in list(_ask_windows):
+            while _ask_windows[key] and _ask_windows[key][0]<now-60:_ask_windows[key].popleft()
+            if not _ask_windows[key]:del _ask_windows[key]
+        window=_ask_windows[user_id]
+        if len(window)>=20:
+            raise HTTPException(429,"Too many questions. Wait a minute and retry.",headers={"Retry-After":"60"})
+        window.append(now)
+
 @app.post("/ask")
 def ask(payload: Ask,user=Depends(current_user)):
+    check_ask_limit(user["id"])
     try:
         return rag.answer(user["id"],payload)
     except HTTPException:

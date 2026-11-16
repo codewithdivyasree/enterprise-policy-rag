@@ -248,18 +248,22 @@ def generate(provider,question,matches,history,user_id=None):
 def answer(user_id,payload):
     started=time.perf_counter()
     selected=connections.for_chat(payload.provider,user_id) if payload.provider!="sources" else None
+    answer_mode=getattr(payload,"answer_mode","auto")
+    allow_general=general_chat_enabled(user_id) and answer_mode!="documents"
+    if answer_mode=="general" and (payload.provider=="sources" or not allow_general):
+        raise HTTPException(400,"General chat requires an AI connection and enabled general questions.")
     # A standalone question must not inherit an unrelated earlier topic.
     query=retrieval_query(payload.question,payload.history)
     documents=store.listing(user_id)
     # General chat with no documents does not initialize an embedding model.
-    matches=engine().retrieve(user_id,query,payload.document_ids) if documents else []
+    matches=engine().retrieve(user_id,query,payload.document_ids) if documents and answer_mode!="general" else []
     used_general=False
     if payload.provider=="sources":
         text=("These passages match your question using semantic and keyword retrieval. No LLM was called."
               if matches else "I couldn't find that information in your uploaded documents.")
         usage={};cited=False;mode="semantic_sources" if matches else "no_context"
     elif not matches:
-        if general_chat_enabled(user_id):
+        if allow_general:
             text,usage,_=generate(payload.provider,payload.question,[],payload.history,user_id)
             text="**General knowledge**\n\n"+text
             cited=False;mode="general_answer";used_general=True
@@ -269,7 +273,7 @@ def answer(user_id,payload):
     else:
         text,usage,cited=generate(payload.provider,payload.question,matches,payload.history,user_id)
         mode="rag_answer" if cited else "uncited_response"
-        if not cited and general_chat_enabled(user_id):
+        if not cited and allow_general:
             # Similarity can retrieve a passage that does not actually answer the question.
             # Do not present that unsupported response as a document-grounded answer.
             text,general_usage,_=generate(payload.provider,payload.question,[],payload.history,user_id)
