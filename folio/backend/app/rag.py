@@ -26,7 +26,7 @@ Conversation history helps interpret follow-up questions but is not evidence.
 If the passages do not establish the answer, briefly say the information is not
 available in the uploaded documents; do not invent a general-knowledge answer.
 For internal evidence tracking, append [S1], [S2], etc. to supported factual
-claims. These markers are removed by the interface before displaying the reply.
+claims, including the first factual sentence; do not postpone all citations until the end. These markers are removed by the interface before displaying the reply.
 Only use IDs from the current context. Do not quote or reproduce a long passage
 unless the user explicitly asks for a quotation. Keep answers focused on the question."""
 
@@ -61,6 +61,43 @@ STOP_WORDS = {
     "for","from","with","and","or","as","than","then","also","some","any",
 }
 
+OPERATOR_NAMES={"==":"equality", "!=":"inequality", "+=":"augmented_addition", "-=":"augmented_subtraction",
+                "*=":"augmented_multiplication", "/=":"augmented_division", ":=":"assignment_expression",
+                "<=":"less_or_equal", ">=":"greater_or_equal", "**":"exponentiation", "//":"floor_division"}
+def operator_terms(text):
+    lower=text.casefold()
+    found=re.findall(r"==|!=|\+=|-=|\*=|/=|:=|<=|>=|\*\*|//",lower)
+    result=["python_operator_"+OPERATOR_NAMES[x] for x in found]
+    # Preserve Python identity without turning every English 'is' into a search term.
+    if (re.search(r"\bis\b",lower) and ("==" in found or "!=" in found or
+        re.search(r"`is`|\bis\s+not\b|\bis\s+(operator|checks|compares)\b|\bidentity\b",lower))):
+        result.append("python_operator_identity")
+    if re.search(r"\bin\s+operator\b|\bmembership\b",lower):result.append("python_operator_membership")
+    return result
+
+def semantic_query(question):
+    labels={"equality":"equality compares values", "identity":"identity same object",
+            "augmented_addition":"in place addition assignment", "exponentiation":"power exponentiation",
+            "floor_division":"integer floor division", "assignment_expression":"walrus assignment expression"}
+    descriptions=[labels.get(t.removeprefix("python_operator_"),t.removeprefix("python_operator_").replace("_"," ")) for t in dict.fromkeys(operator_terms(question))]
+    return question+("\nPython operator meaning: "+"; ".join(descriptions) if descriptions else "")
+
+def passage_quality(text):
+    # A list of suggested questions is a navigational hit, not an explanation.
+    # Keep it as fallback evidence, but rank actual prose before it. FAQ answers
+    # with explicit answer labels do not receive the question-list penalty.
+    suggested=re.search(r"questions to ask|practice questions|suggested questions|sample questions",text,re.I)
+    bullets=len(re.findall(r"(?m)^\s*[-•]\s+[^\n]+\?\s*$",text))
+    return .3 if suggested and bullets>=2 and not re.search(r"(?im)^\s*(answer|solution)\s*:",text) else 1.0
+
+def rerank_candidates(question,ranked,by_id):
+    required=set(operator_terms(question))
+    def score(key):
+        text=by_id[key][0]
+        coverage=len(required.intersection(operator_terms(text)))/len(required) if required else 0
+        return ranked[key]*passage_quality(text)*(1+.25*coverage)
+    return sorted(ranked,key=lambda key:(-score(key),key))
+
 def terms(text):
     result=[]
     for token in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*|\d+",text.casefold()):
@@ -73,7 +110,7 @@ def terms(text):
         elif len(token)>3 and token.endswith("s") and not token.endswith(("ss","us","is")):
             token=token[:-1]
         result.append(token)
-    return result
+    return result+operator_terms(text)
 
 def lexical_candidates(question,records):
     """Rank exact topic matches; plural variants share a normalized term."""
@@ -117,6 +154,7 @@ class Engine:
         self.splitter=RecursiveCharacterTextSplitter(chunk_size=900,chunk_overlap=150,
                                                      add_start_index=True)
         self.lock=threading.RLock()
+        self.index_revisions={}
 
     def chunks(self,user_id):
         result=[]
@@ -140,6 +178,11 @@ class Engine:
 
     def index(self,user_id):
         with self.lock:
+            documents=store.listing(user_id)
+            revision=tuple(sorted((d["id"],d["units"],d["characters"]) for d in documents))
+            cached=self.index_revisions.get(user_id)
+            if cached and cached[0]==revision:
+                return {**cached[1],"added":0}
             chunks=self.chunks(user_id)
             existing=set(self.collection.get(where={"owner_id":user_id},include=[])["ids"])
             desired={x[0] for x in chunks}
@@ -155,13 +198,16 @@ class Engine:
             stale=list(existing-desired)
             if stale:
                 self.collection.delete(ids=stale)
-            return {"chunks":len(chunks),"added":len(missing),"documents":len(store.listing(user_id))}
+            result={"chunks":len(chunks),"added":len(missing),"documents":len(documents)}
+            self.index_revisions[user_id]=(revision,result)
+            return result
 
     def remove(self,user_id,key=None):
         where={"owner_id":user_id} if key is None else {
             "$and":[{"owner_id":user_id},{"document_id":key}]}
         with self.lock:
             self.collection.delete(where=where)
+            self.index_revisions.pop(user_id,None)
 
     def retrieve(self,user_id,question,document_ids):
         with self.lock:
@@ -180,7 +226,7 @@ class Engine:
             keyword_ids={key for key,_ in keyword_rank[:12]}
             by_id={key:(text,meta) for key,text,meta in records}
             try:
-                vector=self.embed([question])
+                vector=self.embed([semantic_query(question)])
             except Exception as exc:
                 raise HTTPException(503,"The embedding model could not process this question. Retry after preparing documents.") from exc
             result=self.collection.query(query_embeddings=vector,where=where,
@@ -194,12 +240,17 @@ class Engine:
             for ranking in ([key for key,_ in keyword_rank[:12]],semantic_rank):
                 for rank,key in enumerate(ranking,1):
                     fused[key]=fused.get(key,0)+1/(60+rank)
-            ranked=sorted(fused,key=lambda key:(-fused[key],distances.get(key,2),key))
+            ranked=rerank_candidates(question,fused,by_id)
             matches=[]
+            selected_terms=[]
             for key in ranked:
                 text,meta=by_id[key]
                 if store.get(meta["document_id"],user_id) is None:
                     continue
+                tokens=set(terms(text))
+                if any(meta["document_id"]==doc_id and len(tokens)>=20 and len(tokens&other)/max(1,len(tokens|other))>.9 for doc_id,other in selected_terms):
+                    continue
+                selected_terms.append((meta["document_id"],tokens))
                 matches.append({"citation_id":f"S{len(matches)+1}","document_id":meta["document_id"],
                     "source":meta["source"],"location":meta["location"],"excerpt":text,
                     "chunk":meta["chunk"],
@@ -237,10 +288,17 @@ def generate(provider,question,matches,history,user_id=None):
     history_text="\n".join(f'{x.role}: {x.text}' for x in history[-6:])[:8000]
     formatted=prompt.format_messages(history=history_text,context=context,question=question)
     answer,usage=llm_gateway.complete(connection,formatted[0].content,formatted[1].content)
-    if not answer.strip():
-        raise HTTPException(502,"The model returned an empty answer. Try again.")
     valid={s["citation_id"] for s in matches}
     cited=set(re.findall(r"\[(S\d+)\]",answer))
+    if matches and (not cited or cited-valid or not answer.strip()):
+        # One fresh, evidence-only attempt. Never attach citations mechanically
+        # to the old answer, or instruct the model to cite an unsupported claim.
+        retry_system=SYSTEM+"\nThe prior response lacked valid evidence citations. Re-read the SOURCE PASSAGES carefully. A list of questions is not an answer; use the explanatory passage. If the sources support an answer, explain it and append the exact [S1] style marker from that passage. If they do not support it, say it is unavailable and do not add a citation. Do not use outside knowledge."
+        answer,retry_usage=llm_gateway.complete(connection,retry_system,formatted[1].content)
+        usage={name:(usage.get(name) or 0)+(retry_usage.get(name) or 0) for name in set(usage)|set(retry_usage)}
+        cited=set(re.findall(r"\[(S\d+)\]",answer))
+    if not answer.strip():
+        raise HTTPException(502,"The model returned an empty answer. Try again.")
     if cited-valid:
         raise HTTPException(502,"The model returned invalid citations. Please retry.")
     return answer,usage,bool(cited)

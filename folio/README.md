@@ -310,3 +310,14 @@ The test suite uses deterministic embeddings and mocked AI responses; its pass c
 Use **Documents** in the sidebar to upload files/ZIPs, search filenames, preview extracted text, prepare the semantic index and manage the library. The table shows upload dates, extracted character counts, text-unit counts and ten rows per page. Individual deletion asks for confirmation.
 
 Chat now uses the full workspace width. Its **Documents** shortcut opens the management page, and its source dropdown keeps per-document selection accessible without duplicating the upload panel. No checked files means all account documents. Switching between Documents and chat preserves the current draft and conversation. Clearing documents does not clear chat history.
+
+
+## Retrieval and evidence reliability update
+
+- Preserve Python operators such as ==, +=, **, // and := in lexical search, and add their meanings to semantic queries. Detect Python identity context without treating ordinary English “is” as a keyword.
+- Rerank explanatory passages above suggested-question lists. Suppress near-identical passages from the same document while keeping distinct evidence.
+- If a document response omits citations, uses invalid source IDs, or is empty, make at most one fresh evidence-only attempt. Never auto-attach a citation to an unsupported answer. Invalid citations after retry still fail; uncited answers still follow the configured no-evidence behavior. General chat and valid first responses do not retry. A citation marker validates its source ID, not factual entailment.
+- Accumulate usage from both provider attempts. A repaired response may consume additional provider quota and latency.
+- Skip resplitting unchanged documents during index synchronization; uploads/deletions invalidate the account revision. The cache is process-local and does not provide durable storage.
+
+Regression tests cover operator tokens, question-list reranking, bounded retries, invalid/absent citations, unsupported-answer preservation, usage totals and index-cache invalidation. Live model quality must still be assessed separately from mocked-provider software tests.
