@@ -303,3 +303,10 @@ Metrics: reviewed accuracy = fully correct / reviewed successful AI cases, with 
 Results are isolated by account. Runs snapshot model settings and document IDs, and reject changed model configurations or deleted source documents. Cases have atomic single-execution claims; repeated execution returns 409. Interrupted running cases are not automatically retried to avoid duplicate provider charges. API keys are never included in run snapshots or JSON exports. Exports contain questions, reference answers and generated text, so share them appropriately.
 
 The test suite uses deterministic embeddings and mocked AI responses; its pass count is software validation, not measured model answer accuracy. Real quality metrics require running your own representative test set and reviewing the answers. Free Render runtime storage remains ephemeral.
+
+
+## Dedicated Documents page
+
+Use **Documents** in the sidebar to upload files/ZIPs, search filenames, preview extracted text, prepare the semantic index and manage the library. The table shows upload dates, extracted character counts, text-unit counts and ten rows per page. Individual deletion asks for confirmation.
+
+Chat now uses the full workspace width. Its **Documents** shortcut opens the management page, and its source dropdown keeps per-document selection accessible without duplicating the upload panel. No checked files means all account documents. Switching between Documents and chat preserves the current draft and conversation. Clearing documents does not clear chat history.

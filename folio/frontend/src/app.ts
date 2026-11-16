@@ -52,7 +52,7 @@ export class AppComponent implements OnInit {
   }catch(e){const h=e as HttpErrorResponse;this.authError=typeof h.error?.detail==='string'?h.error.detail:(h.status===422?'Check all fields and try again.':'Cannot connect. Check that the backend is running.');}
   finally{this.authBusy=false;this.cd.detectChanges();}
  }
- resetWorkspace(){this.user=null;this.evalRun=null;this.evalRuns=[];this.evalCases=[{question:'',expected_answer:'',expected_document_ids:[]}];this.chatId='';this.chatTitle='';this.chats=[];this.historyOpen=false;this.lastFailedQuestion='';this.answerMode='auto';this.docs=[];this.messages=[];this.selected.clear();this.reports=[];this.preview=null;this.showReport=false;this.confirmClear=false;this.question='';this.filter='';this.libraryPage=0;this.profileOpen=false;this.error='';this.notice='';this.view='workspace';this.ragStatus=null;this.provider='sources';this.providerChosen=false;this.clearConnectionState();}
+ resetWorkspace(){this.user=null;this.documentToDelete=null;this.scopeFilter='';this.evalRun=null;this.evalRuns=[];this.evalCases=[{question:'',expected_answer:'',expected_document_ids:[]}];this.chatId='';this.chatTitle='';this.chats=[];this.historyOpen=false;this.lastFailedQuestion='';this.answerMode='auto';this.docs=[];this.messages=[];this.selected.clear();this.reports=[];this.preview=null;this.showReport=false;this.confirmClear=false;this.question='';this.filter='';this.libraryPage=0;this.profileOpen=false;this.error='';this.notice='';this.view='workspace';this.ragStatus=null;this.provider='sources';this.providerChosen=false;this.clearConnectionState();}
  async logout(){
   if(this.uploading||this.indexing||this.searching||this.authBusy||this.settingsBusy||this.evalRunning)return;
   this.authBusy=true;
@@ -61,9 +61,12 @@ export class AppComponent implements OnInit {
   finally{this.authBusy=false;this.cd.detectChanges();}
  }
  docs:Doc[]=[]; selected=new Set<string>(); reports:Report[]=[]; messages:Message[]=[];
+ documentToDelete:Doc|null=null;scopeFilter='';
+ get scopeDocuments(){return this.docs.filter(d=>d.source.toLowerCase().includes(this.scopeFilter.toLowerCase()));}
+ async deleteDocumentConfirmed(){const doc=this.documentToDelete;this.documentToDelete=null;if(doc)await this.remove(doc);}
  filter=''; question=''; connected=false; checking=false; uploading=false; searching=false;
  libraryPage=0; mobilePane:'documents'|'chat'='chat'; showReport=false;
- drag=false; notice=''; error=''; view:'workspace'|'guide'|'connections'|'evaluation'='workspace';
+ drag=false; notice=''; error=''; view:'workspace'|'guide'|'connections'|'evaluation'|'documents'='workspace';
  preview:{source:string;content:Unit[]}|null=null; confirmClear=false;
  motion=localStorage.getItem('folio-motion')||(matchMedia('(prefers-reduced-motion: reduce)').matches?'off':'on');
  theme=localStorage.getItem('folio-theme')||'light';
@@ -193,11 +196,11 @@ export class AppComponent implements OnInit {
   finally{this.indexing=false;this.cd.detectChanges();}
  }
  get filtered(){return this.docs.filter(d=>d.source.toLowerCase().includes(this.filter.toLowerCase()));}
- get pageCount(){return Math.max(1,Math.ceil(this.filtered.length/2));}
+ get pageCount(){return Math.max(1,Math.ceil(this.filtered.length/10));}
  get currentPage(){return Math.min(this.libraryPage,this.pageCount-1);}
- get pagedDocuments(){return this.filtered.slice(this.currentPage*2,this.currentPage*2+2);}
+ get pagedDocuments(){return this.filtered.slice(this.currentPage*10,this.currentPage*10+10);}
  get totalChars(){return this.docs.reduce((sum,d)=>sum+d.characters,0);}
- @HostListener('document:keydown.escape') closeModals(){this.preview=null;this.confirmClear=false;this.showReport=false;this.profileOpen=false;this.closeConnectionForm();this.deleteConnectionTarget=null;}
+ @HostListener('document:keydown.escape') closeModals(){this.documentToDelete=null;this.preview=null;this.confirmClear=false;this.showReport=false;this.profileOpen=false;this.closeConnectionForm();this.deleteConnectionTarget=null;}
  ngOnInit(){this.applyMotion();this.applyTheme();void this.initSession();}
  applyMotion(){document.documentElement.setAttribute("data-motion",this.motion);}
  toggleMotion(){this.motion=this.motion==="on"?"off":"on";localStorage.setItem("folio-motion",this.motion);this.applyMotion();}
@@ -238,7 +241,7 @@ export class AppComponent implements OnInit {
  selectAll(){this.selected=this.selected.size===this.docs.length?new Set():new Set(this.docs.map(d=>d.id));}
  async open(doc:Doc){this.error='';try{this.preview=await firstValueFrom(this.http.get<{source:string;content:Unit[]}>('/documents/'+doc.id));}catch(e){this.fail(e);}this.cd.detectChanges();}
  async remove(doc:Doc){this.error='';try{await firstValueFrom(this.http.delete('/documents/'+doc.id));this.selected.delete(doc.id);if(this.preview?.source===doc.source)this.preview=null;this.notice='Document removed.';await this.refresh();}catch(e){this.fail(e);}this.cd.detectChanges();}
- async clear(){try{await firstValueFrom(this.http.delete('/documents'));this.docs=[];this.selected.clear();this.preview=null;this.messages=[];this.reports=[];this.confirmClear=false;this.notice='All documents removed.';}catch(e){this.fail(e);}this.cd.detectChanges();}
+ async clear(){try{await firstValueFrom(this.http.delete('/documents'));this.docs=[];this.selected.clear();this.preview=null;this.reports=[];this.confirmClear=false;this.notice='All documents removed. Saved conversations are unchanged.';}catch(e){this.fail(e);}this.cd.detectChanges();}
  cleanAnswer(text:string){return text.replace(/\[S\d+\]/g,'').replace(/[ \t]+([.,;:!?])/g,'$1').trim();}
  renderMarkdown(text:string){
   return DOMPurify.sanitize(marked.parse(this.cleanAnswer(text),{async:false,gfm:true,breaks:false}),{
