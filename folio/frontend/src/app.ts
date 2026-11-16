@@ -5,6 +5,7 @@ import {HttpClient, HttpErrorResponse, HttpEventType} from '@angular/common/http
 import {firstValueFrom} from 'rxjs';
 import {marked} from 'marked';
 import DOMPurify from 'dompurify';
+import {cleanAnswer} from './answer-format';
 
 interface User {id:string;name:string;email:string}
 interface Doc {id:string; source:string; uploaded_at:string; units:number; characters:number}
@@ -15,7 +16,7 @@ interface Message {role:'user'|'assistant';text:string;matches?:Match[];provider
 interface RagStatus {providers:{id:string;name:string;model:string;configured:boolean}[];chunks:number;index_available:boolean;embedding_model:string;default_provider:string;general_chat_enabled:boolean}
 
 interface EvalDraftCase {question:string;expected_answer:string;expected_document_ids:string[]}
-interface EvalResult {answer?:string;error?:string;mode?:string;latency_ms:number;reference_f1:number|null;hit_at_k:number|null;document_recall_at_k:number|null;reciprocal_rank:number|null;retrieved_document_ids:string[];retrieved_passages:number;usage?:{input_tokens?:number;output_tokens?:number}}
+interface EvalResult {answer?:string;error?:string;mode?:string;latency_ms:number;timings_ms?:Record<string,number>;reference_f1:number|null;hit_at_k:number|null;document_recall_at_k:number|null;reciprocal_rank:number|null;retrieved_document_ids:string[];retrieved_passages:number;usage?:{input_tokens?:number;output_tokens?:number}}
 interface EvalCase extends EvalDraftCase {id:string;position:number;state:string;result:EvalResult|null;verdict:string;note:string}
 interface EvalRun {id:string;title:string;provider:string;answer_mode:string;created_at:string;snapshot:{name:string;model_id:string;documents:Record<string,string>};cases:EvalCase[];metrics:Record<string,number|null>}
 interface Connection {id:string;name:string;provider:string;provider_name:string;custom_name:string;model_id:string;base_url:string;is_default:boolean;key_configured:boolean;created_at:string;updated_at:string;last_tested_at:string|null;last_test_success:boolean|null;last_test_message:string|null}
@@ -242,7 +243,7 @@ export class AppComponent implements OnInit {
  async open(doc:Doc){this.error='';try{this.preview=await firstValueFrom(this.http.get<{source:string;content:Unit[]}>('/documents/'+doc.id));}catch(e){this.fail(e);}this.cd.detectChanges();}
  async remove(doc:Doc){this.error='';try{await firstValueFrom(this.http.delete('/documents/'+doc.id));this.selected.delete(doc.id);if(this.preview?.source===doc.source)this.preview=null;this.notice='Document removed.';await this.refresh();}catch(e){this.fail(e);}this.cd.detectChanges();}
  async clear(){try{await firstValueFrom(this.http.delete('/documents'));this.docs=[];this.selected.clear();this.preview=null;this.reports=[];this.confirmClear=false;this.notice='All documents removed. Saved conversations are unchanged.';}catch(e){this.fail(e);}this.cd.detectChanges();}
- cleanAnswer(text:string){return text.replace(/\[S\d+\]/g,'').replace(/[ \t]+([.,;:!?])/g,'$1').trim();}
+ cleanAnswer(text:string){return cleanAnswer(text);}
  renderMarkdown(text:string){
   return DOMPurify.sanitize(marked.parse(this.cleanAnswer(text),{async:false,gfm:true,breaks:false}),{
    ALLOWED_TAGS:['p','br','strong','em','ul','ol','li','pre','code','blockquote','h2','h3','h4','table','thead','tbody','tr','th','td','hr'],
@@ -261,7 +262,6 @@ export class AppComponent implements OnInit {
      ? result.sources.filter(source=>!!source.citation_id&&citedIds.has(source.citation_id))
      : result.provider==='sources'?result.sources:[];
    this.messages.push({role:'assistant',text:this.cleanAnswer(result.answer),html:this.renderMarkdown(result.answer),matches:displayedSources,provider:result.provider,providerLabel:result.provider_label,latency:result.latency_ms,tokens:(result.usage.input_tokens||0)+(result.usage.output_tokens||0)});
-   await this.loadRag();
   }catch(e){this.lastFailedQuestion=text;this.fail(e);this.messages.push({role:'assistant',text:'The request could not be completed. Check the message above, then retry. Your documents are still saved.'});}
   finally{if(this.user)await this.saveChat();this.searching=false;this.cd.detectChanges();setTimeout(()=>document.getElementById('conversation-end')?.scrollIntoView({behavior:'smooth',block:'nearest'}),20);}
  }

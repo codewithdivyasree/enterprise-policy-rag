@@ -321,3 +321,14 @@ Chat now uses the full workspace width. Its **Documents** shortcut opens the man
 - Skip resplitting unchanged documents during index synchronization; uploads/deletions invalidate the account revision. The cache is process-local and does not provide durable storage.
 
 Regression tests cover operator tokens, question-list reranking, bounded retries, invalid/absent citations, unsupported-answer preservation, usage totals and index-cache invalidation. Live model quality must still be assessed separately from mocked-provider software tests.
+
+
+## Answer presentation and latency diagnostics
+
+Citation annotations remain in the backend answer for evidence checks. A shared frontend formatter removes annotations without deleting the grammatical subject when a model writes source commentary such as “[S1] confirms …”. Literal citations inside code examples are preserved. The prompt also discourages source-commentary prose. Eight fixture tests cover the reported fragment, punctuation, source subjects, code literals and idempotency.
+
+Local MiniLM inference now uses a single CPU thread, sequential execution and disabled ONNX worker spinning for the constrained demo host. Query embeddings use a bounded 128-entry account-scoped cache; document results and model answers are not cached. Chat no longer waits for a redundant RAG-status request after each answer. These optimizations preserve the current corpus and evidence checks. Their effect on hosted latency requires measurement.
+
+Each answer/evaluation result now includes `timings_ms` and `provider_calls`. The evaluation case has a Timing breakdown disclosure. Retrieval includes index synchronization, query embedding and vector search, so nested values must not be added to the parent. `provider_ms` measures complete adapter calls including any SDK retry/network delay; `generation_ms` also includes prompt and citation processing. Counters/timings are isolated to the current request and do not contain keys or prompt text.
+
+CPU threading guidance: https://onnxruntime.ai/docs/performance/tune-performance/threading.html

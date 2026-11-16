@@ -1,4 +1,6 @@
 """Provider adapters shared by chat and per-connection tests."""
+import time
+from contextvars import ContextVar
 from urllib.parse import urlsplit
 import ipaddress
 import socket
@@ -53,7 +55,15 @@ def request_error(provider,exc):
     message=reasons.get(code,"could not complete the connection. Check internet/proxy access and retry.")
     return HTTPException(502,f"{name} {message}"+(f" (HTTP {code})" if isinstance(code,int) else ""))
 
+CALL_TIMINGS=ContextVar("folio_provider_timings",default=None)
 def complete(config,system,user,max_tokens=1200):
+    started=time.perf_counter()
+    try:return _complete(config,system,user,max_tokens)
+    finally:
+        trace=CALL_TIMINGS.get()
+        if trace is not None:trace.append((time.perf_counter()-started)*1000)
+
+def _complete(config,system,user,max_tokens=1200):
     provider=config["provider"]
     key=config["api_key"];model=config["model_id"]
     try:
