@@ -1,0 +1,12 @@
+**/.env
+**/.env.*
+**/.venv
+**/node_modules
+**/dist
+**/.angular
+**/data
+**/__pycache__
+**/.pytest_cache
+.git
+**/*.key
+**/*.sqlite3
