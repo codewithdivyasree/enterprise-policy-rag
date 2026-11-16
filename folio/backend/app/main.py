@@ -20,12 +20,14 @@ from .auth import router as auth_router, current_user
 from .provider_config import router as settings_router
 from .connections import router as connections_router
 from .conversations import router as conversations_router
+from .evaluations import router as evaluations_router
 
 app = FastAPI(title="RAG Assistant", version="1.1.0")
 app.include_router(auth_router)
 app.include_router(settings_router)
 app.include_router(connections_router)
 app.include_router(conversations_router)
+app.include_router(evaluations_router)
 
 @app.exception_handler(RequestValidationError)
 async def safe_validation_errors(request,exc):

@@ -14,6 +14,10 @@ interface Match {document_id:string;source:string;location:string;excerpt:string
 interface Message {role:'user'|'assistant';text:string;matches?:Match[];provider?:string;providerLabel?:string;latency?:number;tokens?:number;html?:string}
 interface RagStatus {providers:{id:string;name:string;model:string;configured:boolean}[];chunks:number;index_available:boolean;embedding_model:string;default_provider:string;general_chat_enabled:boolean}
 
+interface EvalDraftCase {question:string;expected_answer:string;expected_document_ids:string[]}
+interface EvalResult {answer?:string;error?:string;mode?:string;latency_ms:number;reference_f1:number|null;hit_at_k:number|null;document_recall_at_k:number|null;reciprocal_rank:number|null;retrieved_document_ids:string[];retrieved_passages:number;usage?:{input_tokens?:number;output_tokens?:number}}
+interface EvalCase extends EvalDraftCase {id:string;position:number;state:string;result:EvalResult|null;verdict:string;note:string}
+interface EvalRun {id:string;title:string;provider:string;answer_mode:string;created_at:string;snapshot:{name:string;model_id:string;documents:Record<string,string>};cases:EvalCase[];metrics:Record<string,number|null>}
 interface Connection {id:string;name:string;provider:string;provider_name:string;custom_name:string;model_id:string;base_url:string;is_default:boolean;key_configured:boolean;created_at:string;updated_at:string;last_tested_at:string|null;last_test_success:boolean|null;last_test_message:string|null}
 interface ProviderOption {id:string;name:string;protocol:string;model_hint:string}
 interface ConnectionConfiguration {connections:Connection[];default_id:string;general_chat_enabled:boolean;provider_options:ProviderOption[]}
@@ -48,9 +52,9 @@ export class AppComponent implements OnInit {
   }catch(e){const h=e as HttpErrorResponse;this.authError=typeof h.error?.detail==='string'?h.error.detail:(h.status===422?'Check all fields and try again.':'Cannot connect. Check that the backend is running.');}
   finally{this.authBusy=false;this.cd.detectChanges();}
  }
- resetWorkspace(){this.user=null;this.chatId='';this.chatTitle='';this.chats=[];this.historyOpen=false;this.lastFailedQuestion='';this.answerMode='auto';this.docs=[];this.messages=[];this.selected.clear();this.reports=[];this.preview=null;this.showReport=false;this.confirmClear=false;this.question='';this.filter='';this.libraryPage=0;this.profileOpen=false;this.error='';this.notice='';this.view='workspace';this.ragStatus=null;this.provider='sources';this.providerChosen=false;this.clearConnectionState();}
+ resetWorkspace(){this.user=null;this.evalRun=null;this.evalRuns=[];this.evalCases=[{question:'',expected_answer:'',expected_document_ids:[]}];this.chatId='';this.chatTitle='';this.chats=[];this.historyOpen=false;this.lastFailedQuestion='';this.answerMode='auto';this.docs=[];this.messages=[];this.selected.clear();this.reports=[];this.preview=null;this.showReport=false;this.confirmClear=false;this.question='';this.filter='';this.libraryPage=0;this.profileOpen=false;this.error='';this.notice='';this.view='workspace';this.ragStatus=null;this.provider='sources';this.providerChosen=false;this.clearConnectionState();}
  async logout(){
-  if(this.uploading||this.indexing||this.searching||this.authBusy||this.settingsBusy)return;
+  if(this.uploading||this.indexing||this.searching||this.authBusy||this.settingsBusy||this.evalRunning)return;
   this.authBusy=true;
   try{await firstValueFrom(this.http.post('/auth/logout',{}));this.resetWorkspace();this.authPassword='';this.authMode='login';}
   catch(e){if((e as HttpErrorResponse).status===401)this.resetWorkspace();else this.fail(e);}
@@ -59,7 +63,7 @@ export class AppComponent implements OnInit {
  docs:Doc[]=[]; selected=new Set<string>(); reports:Report[]=[]; messages:Message[]=[];
  filter=''; question=''; connected=false; checking=false; uploading=false; searching=false;
  libraryPage=0; mobilePane:'documents'|'chat'='chat'; showReport=false;
- drag=false; notice=''; error=''; view:'workspace'|'guide'|'connections'='workspace';
+ drag=false; notice=''; error=''; view:'workspace'|'guide'|'connections'|'evaluation'='workspace';
  preview:{source:string;content:Unit[]}|null=null; confirmClear=false;
  motion=localStorage.getItem('folio-motion')||(matchMedia('(prefers-reduced-motion: reduce)').matches?'off':'on');
  theme=localStorage.getItem('folio-theme')||'light';
@@ -82,6 +86,24 @@ export class AppComponent implements OnInit {
  apiConnections:Connection[]=[];providerOptions:ProviderOption[]=[];connectionsLoading=false;connectionSaving=false;connectionAction='';connectionsGeneral=true;savedGeneral=true;
  connectionFormOpen=false;editingConnection:Connection|null=null;deleteConnectionTarget:Connection|null=null;connectionFormError='';connectionMessage='';showConnectionKey=false;modelOptions:string[]=[];
  connectionDraft:ConnectionDraft={name:'',provider:'groq',custom_name:'',api_key:'',model_id:'openai/gpt-oss-20b',base_url:'',is_default:false};
+ evalRuns:{id:string;title:string;created_at:string;provider:string;answer_mode:string}[]=[];evalRun:EvalRun|null=null;
+ evalTitle='My RAG evaluation';evalProvider='sources';evalMode:'documents'|'auto'|'general'='documents';evalCases:EvalDraftCase[]=[{question:'',expected_answer:'',expected_document_ids:[]}];
+ evalBusy=false;evalRunning=false;evalPause=false;evalCreating=false;evalError='';evalShowForm=true;evalImportError='';
+ get evalCanCreate(){return !!this.evalTitle.trim()&&this.evalCases.length>0&&this.evalCases.every(c=>!!c.question.trim())&&!this.evalBusy&&!this.evalRunning;}
+ evalPercent(value:number|null|undefined){return value==null?'—':(value*100).toFixed(1)+'%';}
+ evalNumber(value:number|null|undefined){return value==null?'—':value.toFixed(3);}
+ evalTime(value:number|null|undefined){return value==null?'—':(value/1000).toFixed(2)+' s';}
+ evalSourceName(id:string){return this.evalRun?.snapshot.documents[id]||id;}
+ async openEvaluation(){this.view='evaluation';this.evalError='';this.evalBusy=true;try{await this.loadRag();this.evalProvider=this.ragStatus?.default_provider||'sources';this.evalRuns=await firstValueFrom(this.http.get<typeof this.evalRuns>('/evaluations'));}catch(e){this.evalError=this.connectionErrorText(e);}finally{this.evalBusy=false;this.cd.detectChanges();}}
+ addEvalCase(){if(this.evalCases.length<30)this.evalCases.push({question:'',expected_answer:'',expected_document_ids:[]});}
+ async loadEvalRun(id:string){try{this.evalRun=await firstValueFrom(this.http.get<EvalRun>('/evaluations/'+id));this.evalShowForm=false;}catch(e){this.evalError=this.connectionErrorText(e);}this.cd.detectChanges();}
+ async createEvalRun(){if(!this.evalCanCreate)return;this.evalBusy=true;this.evalError='';try{const run=await firstValueFrom(this.http.post<{id:string}>('/evaluations',{title:this.evalTitle.trim(),provider:this.evalProvider,answer_mode:this.evalMode,cases:this.evalCases}));await this.loadEvalRun(run.id);this.evalRuns=await firstValueFrom(this.http.get<typeof this.evalRuns>('/evaluations'));this.notice='Evaluation created. Click Run pending cases to start.';}catch(e){this.evalError=this.connectionErrorText(e);}finally{this.evalBusy=false;this.cd.detectChanges();}}
+ async runEvaluation(){if(!this.evalRun||this.evalRunning)return;this.evalRunning=true;this.evalPause=false;this.evalError='';const runId=this.evalRun.id;try{for(const c of this.evalRun.cases.filter(c=>c.state==='pending')){if(this.evalPause)break;c.state='running';this.cd.detectChanges();await firstValueFrom(this.http.post('/evaluations/'+runId+'/cases/'+c.id+'/execute',{}));await this.loadEvalRun(runId);if(this.evalRun?.cases.find(x=>x.id===c.id)?.state==='failed'){this.evalPause=true;this.evalError='Run paused after a failed case. Check its error before resuming pending cases.';break;}}}catch(e){this.evalError=this.connectionErrorText(e);await this.loadEvalRun(runId);}finally{this.evalRunning=false;this.cd.detectChanges();}}
+ async reviewEvalCase(c:EvalCase){if(!this.evalRun)return;try{await firstValueFrom(this.http.put('/evaluations/'+this.evalRun.id+'/cases/'+c.id+'/review',{verdict:c.verdict,note:c.note}));await this.loadEvalRun(this.evalRun.id);}catch(e){this.evalError=this.connectionErrorText(e);}this.cd.detectChanges();}
+ exportEvaluation(){if(!this.evalRun)return;this.downloadJson('folio-evaluation-'+this.evalRun.id+'.json',this.evalRun);}
+ exportEvalDataset(){this.downloadJson('folio-evaluation-dataset.json',{title:this.evalTitle,answer_mode:this.evalMode,cases:this.evalCases});}
+ downloadJson(name:string,value:unknown){const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}
+ async importEvalDataset(event:Event){const input=event.target as HTMLInputElement;const f=input.files?.[0];if(!f)return;this.evalImportError='';try{if(f.size>512000)throw Error('Dataset must be smaller than 500 KB.');const d=JSON.parse(await f.text());if(!Array.isArray(d.cases)||!d.cases.length||d.cases.length>30)throw Error('Provide 1–30 test cases.');const allowed=new Set(this.docs.map(d=>d.id));this.evalCases=d.cases.map((c:EvalDraftCase)=>{if(typeof c.question!=='string'||!c.question.trim()||c.question.length>2000||typeof c.expected_answer!=='string'||c.expected_answer.length>8000||!Array.isArray(c.expected_document_ids)||c.expected_document_ids.some(id=>!allowed.has(id)))throw Error('Check question, reference answer and source IDs. Source IDs must belong to documents in this account.');return {question:c.question,expected_answer:c.expected_answer,expected_document_ids:c.expected_document_ids};});if(typeof d.title==='string')this.evalTitle=d.title.slice(0,100);if(['auto','documents','general'].includes(d.answer_mode))this.evalMode=d.answer_mode;}catch(e){this.evalImportError=(e as Error).message;}finally{input.value='';this.cd.detectChanges();}}
  get settingsBusy(){return this.connectionsLoading||this.connectionSaving||!!this.connectionAction;}
  get connectionDestinationChanged(){return !!this.editingConnection&&(this.editingConnection.provider!==this.connectionDraft.provider||this.editingConnection.base_url!==this.connectionDraft.base_url.trim().replace(/\/+$/,''));}
  get selectedProviderOption(){return this.providerOptions.find(p=>p.id===this.connectionDraft.provider);}

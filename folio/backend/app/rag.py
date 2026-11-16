@@ -245,7 +245,7 @@ def generate(provider,question,matches,history,user_id=None):
         raise HTTPException(502,"The model returned invalid citations. Please retry.")
     return answer,usage,bool(cited)
 
-def answer(user_id,payload):
+def answer(user_id,payload,diagnostics=None):
     started=time.perf_counter()
     selected=connections.for_chat(payload.provider,user_id) if payload.provider!="sources" else None
     answer_mode=getattr(payload,"answer_mode","auto")
@@ -257,6 +257,8 @@ def answer(user_id,payload):
     documents=store.listing(user_id)
     # General chat with no documents does not initialize an embedding model.
     matches=engine().retrieve(user_id,query,payload.document_ids) if documents and answer_mode!="general" else []
+    if diagnostics is not None:
+        diagnostics.update(retrieved_document_ids=[m["document_id"] for m in matches],retrieved_passages=len(matches))
     used_general=False
     if payload.provider=="sources":
         text=("These passages match your question using semantic and keyword retrieval. No LLM was called."

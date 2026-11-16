@@ -285,4 +285,21 @@ https://googleapis.github.io/python-genai/
 ### Deployment limits and remaining work
 The free Render deployment uses an ephemeral SQLite database and Chroma index. This update does not make them durable. A restart/redeployment may erase accounts, saved chats, documents and configured keys. Do not treat it as permanent storage. Durable storage needs an external database/storage service or a paid persistent disk. Existing local installations retain data when backend/data is preserved.
 
-Native provider streaming/Stop, a measured answer-quality evaluation dashboard, and durable cloud storage remain future work. The UI does not simulate streaming or claim an unmeasured accuracy score.
+Native provider streaming/Stop and durable cloud storage remain future work. The UI does not simulate streaming or claim an unmeasured accuracy score.
+
+
+## Evaluation dashboard
+
+Open **Evaluation dashboard** in the sidebar. Add a run name, connection and answer mode, then add 1–30 questions. Reference answers and expected source document labels are optional, but should be verified by a person. Do not select only the document you expect when measuring retrieval: the run searches its snapshot of the entire account corpus.
+
+1. Upload and prepare the documents.
+2. Write questions, verified reference answers, and select expected documents where appropriate.
+3. Create evaluation; then Run pending cases. AI connections use provider quota, possibly two requests per Auto-mode case. Sources mode makes no LLM call. The shared 20 requests/minute/account limit applies; runs pause on failure.
+4. Review each completed answer as Correct, Partially correct, Incorrect, or Unreviewed. Save each verdict and note.
+5. Export results JSON and the test set. Create another run to compare a different provider, model or document corpus.
+
+Metrics: reviewed accuracy = fully correct / reviewed successful AI cases, with review coverage shown; retrieval Hit@6 checks whether an expected document occurs among the first six ranked passages; document Recall@6 counts distinct expected documents found; MRR@6 uses the first matching passage rank; reference token F1 measures case-folded word overlap, excluding internal citation markers and the fixed General knowledge heading; mean and nearest-rank p95 latency use completed backend requests (including indexing if needed), while failures are reported separately. Token counts come from provider usage fields and are not cost estimates. General chat and unlabeled retrieval cases have no retrieval score. No values are fabricated when there are no eligible cases.
+
+Results are isolated by account. Runs snapshot model settings and document IDs, and reject changed model configurations or deleted source documents. Cases have atomic single-execution claims; repeated execution returns 409. Interrupted running cases are not automatically retried to avoid duplicate provider charges. API keys are never included in run snapshots or JSON exports. Exports contain questions, reference answers and generated text, so share them appropriately.
+
+The test suite uses deterministic embeddings and mocked AI responses; its pass count is software validation, not measured model answer accuracy. Real quality metrics require running your own representative test set and reviewing the answers. Free Render runtime storage remains ephemeral.
