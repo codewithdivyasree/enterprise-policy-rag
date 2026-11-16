@@ -74,9 +74,9 @@ export class AppComponent implements OnInit {
  uploadStage=''; uploadPercent=0; pendingName=''; model='Semantic sources'; provider='sources'; indexing=false;
  ragStatus:RagStatus|null=null; providerChosen=false;
  answerMode:'auto'|'documents'|'general'='auto';
- chats:{id:string;title:string;updated_at:string}[]=[];chatId='';chatTitle='';historyOpen=false;chatFilter='';chatBusy=false;deleteChatId='';lastFailedQuestion='';
+ chats:{id:string;title:string;updated_at:string}[]=[];chatId='';chatTitle='';historyOpen=false;chatFilter='';chatBusy=false;chatsLoading=false;chatsError='';deleteChatId='';lastFailedQuestion='';
  get filteredChats(){return this.chats.filter(c=>c.title.toLowerCase().includes(this.chatFilter.toLowerCase()));}
- async loadChats(){try{this.chats=await firstValueFrom(this.http.get<typeof this.chats>('/conversations'));}catch(e){this.fail(e);}}
+ async loadChats(){this.chatsLoading=true;this.chatsError='';try{this.chats=await firstValueFrom(this.http.get<typeof this.chats>('/conversations'));}catch(e){this.chatsError='Could not load saved conversations. Please retry.';this.fail(e);}finally{this.chatsLoading=false;this.cd.detectChanges();}}
  async openHistory(){this.historyOpen=true;await this.loadChats();}
  async openChat(id:string){if(this.searching||this.chatBusy)return;this.chatBusy=true;try{const c=await firstValueFrom(this.http.get<{id:string;title:string;messages:Message[]}>('/conversations/'+id));this.chatId=c.id;this.chatTitle=c.title;this.messages=c.messages.map(m=>({...m,html:m.role==='assistant'?this.renderMarkdown(m.text):undefined}));this.historyOpen=false;this.view='workspace';this.lastFailedQuestion='';}catch(e){this.fail(e);}finally{this.chatBusy=false;this.cd.detectChanges();}}
  async saveChat(){if(!this.user||!this.messages.length)return;const payload={title:this.chatTitle||this.messages.find(m=>m.role==='user')?.text.slice(0,100)||'Conversation',messages:this.messages.slice(-100).map(({html,...m})=>m)};try{if(this.chatId)await firstValueFrom(this.http.put('/conversations/'+this.chatId,payload));else{const c=await firstValueFrom(this.http.post<{id:string}>('/conversations',payload));this.chatId=c.id;}this.chatTitle=payload.title;}catch{this.error='Your reply is available, but conversation history could not be saved.';}}
